@@ -1,0 +1,381 @@
+import glob, os
+import numpy as np
+import torch
+from utils.images_utils import imagesc, to_8bit
+import torchvision.transforms as transforms
+from PIL import Image
+import scipy.ndimage
+import pandas as pd
+import torch
+import torch.nn as nn
+from collections import OrderedDict
+import scipy.ndimage
+from skimage import measure
+from utils.match_dess_tse import linear_registration, make_compare, apply_warp
+
+# segmentation network
+from models.unet import UNet_clean
+from models.OaiLocator import OaiLocator
+
+
+def resampling(x, new_size):
+    l = len(x.shape)
+    if l == 2:
+        x = torch.from_numpy(x).type(torch.FloatTensor).unsqueeze(0).unsqueeze(1)
+    if l == 3:
+        x = torch.from_numpy(x).type(torch.FloatTensor).unsqueeze(1)
+
+    x = nn.functional.interpolate(
+        input=x, size=new_size, mode='bilinear', align_corners=True)
+
+    return x.squeeze()
+
+
+def make_dir(x):
+    if not os.path.isdir(x):
+        os.mkdir(x)
+
+
+def to_dataset():
+    destination = '/media/ghc/GHc_data1/paired_images/OAI00eff/'
+    make_dir(destination)
+    make_dir(destination + 'train/')
+    make_dir(destination + 'train/a/')
+    side = 'RIGHT'
+    sequence = 'SAG_IW_TSE_'
+
+    alist = sorted(glob.glob('/media/ghc/GHc_data1/OAI_extracted/OAI00eff1/Npy/' + sequence + side + '_cropped/*'))
+
+    for i in range(0, int(len(alist) / 10 * 7)):
+        ID = alist[i].split('/')[-1].split('.')[0]
+        a = np.load(alist[i])
+        a[a >= 400] = 400
+        for s in range(a.shape[2]):
+            imagesc(a[:, :, s], show=False, save=destination + 'train/a/' + ID + '_' + side + '_' + str(s) + '.png')
+
+
+def make_grid(x):
+    return np.concatenate([x[:, :, i] for i in range(x.shape[2])], 1)
+
+
+def match_tse_dess(tse, dess):
+    """
+    read the meta data and align TSE and DESS using Slice Location
+    """
+    dess_slice_location = dess['SliceLocation'].values
+    tse_slice_location = tse['SliceLocation'].values
+    match_tse_dess = [np.argmin(np.abs(dess_slice_location - x)) for x in tse_slice_location]
+    return match_tse_dess
+
+
+def read_slices_from_df(df, source):
+    all = []
+    for i in range(df.shape[0]):
+        x = np.load(source + df['filename'].values[i]+'.npy', allow_pickle=True)
+        all.append(np.expand_dims(x, 2))
+    return np.concatenate(all, 2)
+
+
+def moving_average(x, w):
+    return np.convolve(x, np.ones(w), 'valid') / w
+
+
+def get_model():
+    netg = torch.load('models/netG_model_epoch_360.pth')
+    #
+    locator = OaiLocator(args_m={'backbone': 'alexnet', 'pretrained': True, 'n_classes': 2})
+    locatorckpt = torch.load('models/oai_locator_alexnet2.ckpt')
+    state_dict = locatorckpt['state_dict']
+    new_dict = OrderedDict()
+    for k in list(state_dict.keys()):
+        new_dict[k.split('net.')[-1]] = state_dict[k]
+    locator.load_state_dict(new_dict)
+
+    unet = torch.load('models/BoneSeg3.pth')
+    unet = unet.cuda()
+
+    return netg, locator, unet
+
+
+def big_compare(x, y, show=True, save=None):
+    z = np.concatenate(([make_compare(x[:, :, i],
+                                      y[:, :, i] * x.mean() / y.mean())
+                         for i in range(x.shape[2])]), 1)
+    imagesc(z, show=show, save=save)
+    return z
+
+
+def npy_2_tensor(y0, threshold):
+    y = 1 * y0
+    if threshold:
+        y[y>=threshold] = threshold
+    y = y / y.max()
+    y = torch.from_numpy(y)
+    y = y.permute(2, 0, 1)
+    y = y.unsqueeze(1)
+    y = torch.cat([y] * 3, 1)
+    y = y.type(torch.FloatTensor)
+    return y
+
+def tensor_2_numpy(y0):
+    y = 1 * y0
+    y = y[:, 0, :, :].permute(1, 2, 0)
+    return y.numpy()
+
+
+class OAI_preprocess():
+    def __init__(self, source, side):
+        self.source = source
+        self.side = side
+        self.meta = meta_process(meta=pd.read_csv(source + 'meta.csv'))
+        self.ID_list = sorted(self.meta.loc[self.meta['side'] == side, 'ID'].unique())
+        self.create_destination()
+
+    def create_destination(self):
+        """
+        create folders of destinations
+        """
+        make_dir(self.source + 'processed/')
+        make_dir(self.source + 'processed/SAG_IW_TSE_' + self.side + '_cropped/')
+        make_dir(self.source + 'processed/SAG_3D_DESS_' + self.side + '_cropped/')
+        make_dir(self.source + 'processed/check_' + self.side + '/')
+
+    def get_tse(self, ID):
+        """
+        get MRI images of TSE
+        """
+        meta = self.meta
+        side = self.side
+        source = self.source
+        df_tse = meta.loc[(meta['ID'] == ID) & (meta['sequences'] == 'TSE') & (meta['side'] == side)]
+        df_tse = df_tse.drop_duplicates(subset=['filename'])
+        self.df_tse = df_tse
+        tse = read_slices_from_df(df_tse, source)
+        if tse.shape[:2] != (444, 444):
+            tse = scipy.ndimage.zoom(tse, (444 / tse.shape[0], 444 / tse.shape[1], 1))
+        self.tse = tse
+
+    def get_dess(self, ID, match=True):
+        """
+        get MRI images of DESS
+        """
+        meta = self.meta
+        side = self.side
+        source = self.source
+        df_dess = meta.loc[(meta['ID'] == ID) & (meta['sequences'] == 'DESS') & (meta['side'] == side)]
+        if match:
+            match_td = match_tse_dess(tse=self.df_tse, dess=df_dess)
+            dess_match = df_dess.iloc[match_td]
+            dess = read_slices_from_df(dess_match, source)
+        else:
+            dess = read_slices_from_df(df_dess, source)
+        if dess.shape[:2] != (384, 384):
+            dess = scipy.ndimage.zoom(dess, (384 / dess.shape[0], 384 / dess.shape[1], 1))
+        self.dess = dess
+
+    def get_pcl(self, npys, locator, threshold):
+        """
+        get slice location of PCL
+        """
+        # TSE PCL locator
+        y = npy_2_tensor(npys, threshold=threshold)
+        loc, = locator((y,))
+        loc = nn.Softmax()(loc).detach().cpu().numpy()
+        pcl = np.argmax(moving_average(loc[:, 1], 3))
+        if pcl <= 11:
+            pcl = 19
+        self.pcl_tse = pcl
+
+    def get_t2d(self, y00, netg, resample=512):
+        """
+        convert tse images to dess
+        """
+        # Padding
+        y = 1 * y00
+        orisize = y.shape[2]
+        if resample:
+            y = torch.nn.functional.interpolate(y, (resample, resample), mode='bicubic', align_corners=True)
+        for i in range(y.shape[0]):
+            y[i, :, :, :] = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))(y[i, :, :, :])
+        # use TSE -> DESS Generator
+        yg = netg(y.cuda())
+        if resample:
+            yg = torch.nn.functional.interpolate(yg, (orisize, orisize), mode='bicubic', align_corners=True)
+        self.t2d = tensor_2_numpy(yg.detach().cpu())
+        return self.t2d
+
+    def crop_npys(self, list_names, list_crop):
+        """
+        crop the list of npys
+        """
+        for name in list_names:
+            npy = getattr(self, name)
+            if list_crop[0] is not None:
+                npy = npy[list_crop[0], :, :]
+            if list_crop[1] is not None:
+                npy = npy[:, list_crop[1], :]
+            if list_crop[2] is not None:
+                npy = npy[:, :, list_crop[2]]
+            setattr(self, name, npy)
+
+    def registraion(self, tt0, dd0, smooth_warp_matrix=True, existing_warp_matrix=None):
+        """
+        perform linear registration
+        """
+        warp_mode = 1
+        tt = 1 * tt0
+        tt = tt - tt.min()
+        tt = tt / tt.max()
+        dd = 1 * dd0
+        dd = dd - dd.min()
+        dd = dd / dd.max()
+        print('performing registration....')
+        if existing_warp_matrix is None:
+            wm = []
+            dess_aligned = []
+            for s in range(tt.shape[2]):
+                aligned, w = linear_registration(tt[:, :, s], dd[:, :, s], warp_mode=warp_mode, steps=500)
+                dess_aligned.append(np.expand_dims(aligned, 2))
+                wm.append(np.expand_dims(w, 2))
+
+            dess_aligned = np.concatenate(dess_aligned, 2)
+            wm = np.concatenate(wm, 2)
+
+            if smooth_warp_matrix:  # interpolate warping matrices
+                xi = np.linspace(0, 1, wm.shape[2])
+                wm2 = 0 * wm
+                for i in range(wm.shape[0]):
+                    for j in range(wm.shape[1]):
+                        pcoeff = np.polyfit(xi, wm[i, j, :], 5)
+                        wm2[i, j, :] = np.array([np.polyval(pcoeff, x) for x in xi])
+                wm = wm2
+        else:
+            wm = existing_warp_matrix
+            dess_aligned2 = []
+            for s in range(dd.shape[2]):
+                aligned2 = apply_warp(tt[:, :, 0].shape, op.dess[:, :, s], warp_matrix=wm[:, :, s],
+                                      warp_mode=warp_mode)
+                dess_aligned2.append(np.expand_dims(aligned2, 2))
+            dess_aligned = np.concatenate(dess_aligned2, 2)
+        print('registration done')
+        return dess_aligned, wm
+
+
+def get_seg(y0, unet):
+    seg = np.zeros((y0.shape[0], y0.shape[2], y0.shape[3]))
+    y = 1 * y0
+
+    y = y - y.min()
+    y = y / y.max()
+
+    dx = (444 - 384) // 2
+    y = y[:, :, dx:-dx, dx:-dx].cuda()
+    y = unet(y)[0].detach().cpu().numpy()
+
+    seg[:, dx:-dx, dx:-dx] = np.argmax(y, 1)
+    return seg
+
+
+def seg2crop(npys, cropHW, cartilage_channel):
+    # TSE crop from front view
+    front = (npys == cartilage_channel).sum(2)
+    front[:100, :] = 0
+    front[-100:, :] = 0
+    front[:, :100] = 0
+    front[:, -100:] = 0
+
+    movingavg = scipy.ndimage.uniform_filter(front / front.max(), size=50)
+    (cm0front, cm1front) = np.unravel_index(movingavg.argmax(), movingavg.shape)
+    crop = [cm0front + cropHW[0], cm0front + cropHW[1], cm1front + cropHW[2], cm1front + cropHW[3]]
+
+    # adjust cropping coordinate if the cropping window is out of the boundaries
+    (H, W, _) = npys.shape
+    if crop[0] < 0:
+        crop[0] = 0
+        crop[1] = (cropHW[1] - cropHW[0])
+    elif crop[1] > H:
+        crop[1] = H
+        crop[0] = H - (cropHW[1] - cropHW[0])
+    if crop[2] < 0:
+        crop[2] = 0
+        crop[3] = (cropHW[3] - cropHW[2])
+    elif crop[3] > W:
+        crop[3] = W
+        crop[2] = W - (cropHW[3] - cropHW[2])
+
+    return crop
+
+
+if __name__ == '__main__':
+    from utils.oai_unzip import meta_process
+    # get pytorch models
+    netg, locator, unet = get_model()
+
+    # basic info
+    source = '/media/ghc/GHc_data1/OAI/OAI_extracted/OAI00eff0/Npy/'
+    side = 'RIGHT'
+    op = OAI_preprocess(source=source, side=side)
+
+    # settings
+    existing_warp_matrix = False
+    existing_crop = False
+
+    for ID in op.ID_list:
+        # get op.tse
+        op.get_tse(ID)
+        # get op.dess
+        op.get_dess(ID, match=True)
+        # get op.pcl_tse
+        op.get_pcl(npys=op.tse, locator=locator, threshold=400)
+        # get op.t2d
+        _ = op.get_t2d(npy_2_tensor(op.tse, threshold=400), netg=netg, resample=512)
+        # first crop enter slice of t2d
+        op.crop_npys(list_names=['tse', 'dess', 't2d'],
+                     list_crop=[None, None, range(op.pcl_tse - 11, op.pcl_tse + 12)])
+
+        # registration op.dess -> op.dess_aligned by op.t2d
+        # wrap_matrix: (2, 3, 23) matrix to define the registration
+        if existing_warp_matrix:
+            wm = np.load(source + 'processed/wrap_' + side + '/' + ID + '.npy')
+        else:
+            wm = None
+        op.dess_aligned, wrap_matrix = op.registraion(tt0=op.t2d, dd0=op.dess, smooth_warp_matrix=True,
+                                                      existing_warp_matrix=wm)
+
+        # segmentation
+        op.dess_aligned_seg = np.transpose(get_seg(npy_2_tensor(op.dess_aligned, threshold=400), unet=unet), (1, 2, 0))
+        op.t2d_seg = np.transpose(get_seg(npy_2_tensor(op.t2d, threshold=400), unet=unet), (1, 2, 0))
+
+        # inplane-crop coordinates
+        if existing_crop:
+            crop = np.load(source + 'processed/crop_' + side + '/' + ID + '.npy')
+        else:
+            crop = seg2crop(npys=op.dess_aligned_seg, cropHW=[-147-60, 147-60, -147-30, 147-30], cartilage_channel=2)
+
+        op.crop_npys(list_names=['tse', 'dess_aligned', 't2d', 'dess_aligned_seg', 't2d_seg'],
+                     list_crop=[range(crop[0], crop[1]), range(crop[2], crop[3]), None])
+
+        a0 = np.concatenate([make_compare(op.dess_aligned[:, :, s], op.dess_aligned[:, :, s] / 8) for s in
+                            range(op.dess_aligned.shape[2])], 1)
+        a = np.concatenate([make_compare(op.dess_aligned[:, :, s], op.dess_aligned_seg[:, :, s] / 8) for s in
+                            range(op.dess_aligned.shape[2])], 1)
+        b = np.concatenate([make_compare(op.tse[:, :, s], op.dess_aligned[:, :, s]) for s in
+                            range(op.dess_aligned.shape[2])], 1)
+        c = np.concatenate([make_compare(op.tse[:, :, s], op.t2d_seg[:, :, s] / 8) for s in
+                            range(op.dess_aligned.shape[2])], 1)
+        c0 = np.concatenate([make_compare(op.tse[:, :, s], op.tse[:, :, s] / 8) for s in
+                             range(op.dess_aligned.shape[2])], 1)
+
+        make_dir(source + 'processed/out_' + side + '/')
+        make_dir(source + 'processed/wrap_' + side + '/')
+        make_dir(source + 'processed/crop_' + side + '/')
+
+        imagesc(np.concatenate([a0, a, b, c, c0], 0), show=False, save=source + 'processed/out_' + side + '/' + ID + '.jpg')
+        np.save(source + 'processed/SAG_IW_TSE_' + side + '_cropped/' + ID + '.npy', op.tse)
+        np.save(source + 'processed/SAG_3D_DESS_' + side + '_cropped/' + ID + '.npy', op.dess_aligned)
+
+        if not existing_warp_matrix:
+            np.save(source + 'processed/wrap_' + side + '/' + ID + '.npy', wrap_matrix)
+        if not existing_crop:
+            np.save(source + 'processed/crop_' + side + '/' + ID + '.npy', crop)
+
