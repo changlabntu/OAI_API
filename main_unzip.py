@@ -1,5 +1,8 @@
 import pandas as pd
 from utils.oai_unzip import unzip_selected
+from dotenv import load_dotenv
+import os
+load_dotenv('.env')
 
 
 def dcm_2_npys(root_folder, data_name):
@@ -15,14 +18,14 @@ def dcm_2_npys(root_folder, data_name):
 
 
 if __name__ == '__main__':
-    zip00m = '/media/ghc/GHc_data1/OAI/OAI_raw/OAIBaselineImages/results/00m.zip'
-    root_folder = '/media/ghc/GHc_data1/OAI/OAI_extracted/'
+    zip00m = os.environ.get('zip00m')#'/media/ghc/GHc_data1/OAI/OAI_raw/OAIBaselineImages/results/00m.zip'
+    source = os.environ.get('source')#'/media/ghc/GHc_data1/OAI/OAI_extracted/'
     data_name = 'OAI00eff0_test/'
 
     # unzip dicom files for the zip file
-    unzip_selected(df=pd.read_csv('OAI00eff0.csv'),
+    unzip_selected(df=pd.read_csv('OAI00eff0.csv').iloc[:100,:],
                    zipname=zip00m,
-                   destination=root_folder + data_name)
+                   destination=source + data_name)
 
     # convert the images from the dicom to .npy
-    dcm_2_npys(root_folder, data_name)
+    dcm_2_npys(source, data_name)

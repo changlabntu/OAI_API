@@ -16,6 +16,9 @@ from utils.match_dess_tse import linear_registration, make_compare, apply_warp
 # segmentation network
 from models.unet import UNet_clean
 from models.OaiLocator import OaiLocator
+import os
+from dotenv import load_dotenv
+load_dotenv('.env')
 
 
 def resampling(x, new_size):
@@ -36,15 +39,16 @@ def make_dir(x):
         os.mkdir(x)
 
 
-def to_dataset():
-    destination = '/media/ghc/GHc_data1/paired_images/OAI00eff/'
+def to_dataset(source, destination):
+    """
+    presently not in use
+    """
     make_dir(destination)
     make_dir(destination + 'train/')
     make_dir(destination + 'train/a/')
     side = 'RIGHT'
     sequence = 'SAG_IW_TSE_'
-
-    alist = sorted(glob.glob('/media/ghc/GHc_data1/OAI_extracted/OAI00eff1/Npy/' + sequence + side + '_cropped/*'))
+    alist = sorted(glob.glob(source))
 
     for i in range(0, int(len(alist) / 10 * 7)):
         ID = alist[i].split('/')[-1].split('.')[0]
@@ -312,7 +316,7 @@ if __name__ == '__main__':
     netg, locator, unet = get_model()
 
     # basic info
-    source = '/media/ghc/GHc_data1/OAI/OAI_extracted/OAI00eff0/Npy/'
+    source = os.environ.get('source') + 'OAI00eff0_test/Npy/'
     side = 'RIGHT'
     op = OAI_preprocess(source=source, side=side)
 
@@ -352,9 +356,15 @@ if __name__ == '__main__':
         else:
             crop = seg2crop(npys=op.dess_aligned_seg, cropHW=[-147-60, 147-60, -147-30, 147-30], cartilage_channel=2)
 
+        # inplane-cropping
         op.crop_npys(list_names=['tse', 'dess_aligned', 't2d', 'dess_aligned_seg', 't2d_seg'],
                      list_crop=[range(crop[0], crop[1]), range(crop[2], crop[3]), None])
 
+        # save npy files
+        np.save(source + 'processed/SAG_IW_TSE_' + side + '_cropped/' + ID + '.npy', op.tse)
+        np.save(source + 'processed/SAG_3D_DESS_' + side + '_cropped/' + ID + '.npy', op.dess_aligned)
+
+        # print outputs
         a0 = np.concatenate([make_compare(op.dess_aligned[:, :, s], op.dess_aligned[:, :, s] / 8) for s in
                             range(op.dess_aligned.shape[2])], 1)
         a = np.concatenate([make_compare(op.dess_aligned[:, :, s], op.dess_aligned_seg[:, :, s] / 8) for s in
@@ -371,8 +381,6 @@ if __name__ == '__main__':
         make_dir(source + 'processed/crop_' + side + '/')
 
         imagesc(np.concatenate([a0, a, b, c, c0], 0), show=False, save=source + 'processed/out_' + side + '/' + ID + '.jpg')
-        np.save(source + 'processed/SAG_IW_TSE_' + side + '_cropped/' + ID + '.npy', op.tse)
-        np.save(source + 'processed/SAG_3D_DESS_' + side + '_cropped/' + ID + '.npy', op.dess_aligned)
 
         if not existing_warp_matrix:
             np.save(source + 'processed/wrap_' + side + '/' + ID + '.npy', wrap_matrix)
