@@ -85,7 +85,8 @@ def moving_average(x, w):
 
 
 def get_model():
-    netg = torch.load('models/netG_model_epoch_360.pth')
+    #netg = torch.load('models/netG_model_epoch_360.pth')
+    netg = torch.load('models/TrySeg100.pth')
     #
     locator = OaiLocator(args_m={'backbone': 'alexnet', 'pretrained': True, 'n_classes': 2})
     locatorckpt = torch.load('models/oai_locator_alexnet2.ckpt')
@@ -95,7 +96,7 @@ def get_model():
         new_dict[k.split('net.')[-1]] = state_dict[k]
     locator.load_state_dict(new_dict)
 
-    unet = torch.load('models/BoneSeg3.pth')
+    unet = torch.load('models/30.pth')
     unet = unet.cuda()
 
     return netg, locator, unet
@@ -190,22 +191,36 @@ class OAI_preprocess():
             pcl = 19
         self.pcl_tse = pcl
 
-    def get_t2d(self, y00, netg, resample=512):
+    def get_t2d(self, y00, netg, resample=512, padding=0):
         """
         convert tse images to dess
         """
-        # Padding
         y = 1 * y00
         orisize = y.shape[2]
+
+        print(y.shape)
+
         if resample:
             y = torch.nn.functional.interpolate(y, (resample, resample), mode='bicubic', align_corners=True)
+        if padding:
+            y = torch.nn.ZeroPad2d(padding)(y)
+
         for i in range(y.shape[0]):
             y[i, :, :, :] = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))(y[i, :, :, :])
+
         # use TSE -> DESS Generator
         yg = netg(y.cuda())
         if resample:
             yg = torch.nn.functional.interpolate(yg, (orisize, orisize), mode='bicubic', align_corners=True)
+        if padding:
+            yg = torch.nn.ZeroPad2d(padding)(yg)
+
+        print(yg.shape)
+
         self.t2d = tensor_2_numpy(yg.detach().cpu())
+
+        print(self.t2d.shape)
+
         return self.t2d
 
     def crop_npys(self, list_names, list_crop):
@@ -266,17 +281,41 @@ class OAI_preprocess():
 
 
 def get_seg(y0, unet):
-    seg = np.zeros((y0.shape[0], y0.shape[2], y0.shape[3]))
+    with torch.no_grad:
+        seg = np.zeros((y0.shape[0], y0.shape[2], y0.shape[3]))
+        y = 1 * y0
+
+        y = y - y.min()
+        y = y / y.max()
+        dx = (y.shape[2] - 384) // 2
+        if dx > 0:
+            y = y[:, :, dx:-dx, dx:-dx].cuda()
+        else:
+            y = y.cuda()
+        y = unet(y)[0].detach().cpu().numpy()
+        if dx > 0:
+            seg[:, dx:-dx, dx:-dx] = np.argmax(y, 1)
+        else:
+            seg = np.argmax(y, 1)
+    return seg
+
+
+def get_seg2(y0, unet, resample):
+    osize = y0.shape[2]
     y = 1 * y0
+    y = torch.nn.functional.interpolate(y, (resample, resample), mode='bicubic', align_corners=True)
 
     y = y - y.min()
     y = y / y.max()
 
-    dx = (444 - 384) // 2
-    y = y[:, :, dx:-dx, dx:-dx].cuda()
-    y = unet(y)[0].detach().cpu().numpy()
+    y = y.cuda()
+    y = unet(y)
+    y = torch.nn.functional.interpolate(y, (osize, osize), mode='bicubic', align_corners=True).detach().cpu().numpy()
+    seg = np.argmax(y, 1)
 
-    seg[:, dx:-dx, dx:-dx] = np.argmax(y, 1)
+    seg[seg==2] = 1
+    seg[seg==3] = 2
+
     return seg
 
 
@@ -316,7 +355,7 @@ if __name__ == '__main__':
     netg, locator, unet = get_model()
 
     # basic info
-    source = os.environ.get('source') + 'OAI00eff0_test/Npy/'
+    source = os.environ.get('source') + 'OAI00womac3/Npy/'
     side = 'RIGHT'
     op = OAI_preprocess(source=source, side=side)
 
@@ -324,15 +363,16 @@ if __name__ == '__main__':
     existing_warp_matrix = False
     existing_crop = False
 
-    for ID in op.ID_list:
+    for ID in op.ID_list[:10]:
         # get op.tse
         op.get_tse(ID)
         # get op.dess
         op.get_dess(ID, match=True)
         # get op.pcl_tse
         op.get_pcl(npys=op.tse, locator=locator, threshold=400)
+        print(op.pcl_tse)
         # get op.t2d
-        _ = op.get_t2d(npy_2_tensor(op.tse, threshold=400), netg=netg, resample=512)
+        _ = op.get_t2d(npy_2_tensor(op.tse, threshold=400), netg=netg, resample=512, padding=0)
         # first crop enter slice of t2d
         op.crop_npys(list_names=['tse', 'dess', 't2d'],
                      list_crop=[None, None, range(op.pcl_tse - 11, op.pcl_tse + 12)])
@@ -347,18 +387,25 @@ if __name__ == '__main__':
                                                       existing_warp_matrix=wm)
 
         # segmentation
-        op.dess_aligned_seg = np.transpose(get_seg(npy_2_tensor(op.dess_aligned, threshold=400), unet=unet), (1, 2, 0))
-        op.t2d_seg = np.transpose(get_seg(npy_2_tensor(op.t2d, threshold=400), unet=unet), (1, 2, 0))
+        op.dess_seg = np.transpose(get_seg2(npy_2_tensor(op.dess, threshold=400), unet=unet, resample=384), (1, 2, 0))
+
+        op.dess_aligned_seg = np.transpose(get_seg2(npy_2_tensor(op.dess_aligned, threshold=400), unet=unet, resample=448), (1, 2, 0))
+        op.t2d_seg = np.transpose(get_seg2(npy_2_tensor(op.t2d, threshold=400), unet=unet, resample=448), (1, 2, 0))
 
         # inplane-crop coordinates
+        dx = 294 // 2
         if existing_crop:
             crop = np.load(source + 'processed/crop_' + side + '/' + ID + '.npy')
         else:
-            crop = seg2crop(npys=op.dess_aligned_seg, cropHW=[-147-60, 147-60, -147-30, 147-30], cartilage_channel=2)
+            crop = seg2crop(npys=op.dess_aligned_seg, cropHW=[-dx-60, dx-60, -dx-30, dx-30], cartilage_channel=2)
 
         # inplane-cropping
         op.crop_npys(list_names=['tse', 'dess_aligned', 't2d', 'dess_aligned_seg', 't2d_seg'],
                      list_crop=[range(crop[0], crop[1]), range(crop[2], crop[3]), None])
+
+        # segmentation again
+        #op.dess_aligned_seg = np.transpose(get_seg2(npy_2_tensor(op.dess_aligned, threshold=400), unet=unet, resample=256), (1, 2, 0))
+        #op.t2d_seg = np.transpose(get_seg2(npy_2_tensor(op.t2d, threshold=400), unet=unet, resample=256), (1, 2, 0))
 
         # save npy files
         np.save(source + 'processed/SAG_IW_TSE_' + side + '_cropped/' + ID + '.npy', op.tse)
@@ -376,14 +423,23 @@ if __name__ == '__main__':
         c0 = np.concatenate([make_compare(op.tse[:, :, s], op.tse[:, :, s] / 8) for s in
                              range(op.dess_aligned.shape[2])], 1)
 
-        make_dir(source + 'processed/out_' + side + '/')
         make_dir(source + 'processed/wrap_' + side + '/')
         make_dir(source + 'processed/crop_' + side + '/')
 
-        imagesc(np.concatenate([a0, a, b, c, c0], 0), show=False, save=source + 'processed/out_' + side + '/' + ID + '.jpg')
+        imagesc(np.concatenate([a0, a, b, c, c0], 0), show=False, save=source + 'processed/check_' + side + '/' + ID + '.jpg')
 
         if not existing_warp_matrix:
             np.save(source + 'processed/wrap_' + side + '/' + ID + '.npy', wrap_matrix)
         if not existing_crop:
             np.save(source + 'processed/crop_' + side + '/' + ID + '.npy', crop)
 
+if 0:
+    # l = glob.glob('/media/ExtHDD01/Dataset/paired_images/TSE_DESS/train/b/*')
+    # out=unet(torch.cat([torch.from_numpy(np.array(Image.open(l[200]))[:256, :256]).unsqueeze(0).unsqueeze(0)] * 3, 1).type(torch.FloatTensor).cuda())
+
+    npy = np.array(Image.open(l[400]))[:256, :256]
+
+    out = unet(npy_2_tensor(np.expand_dims(npy, 2), threshold=400).cuda())
+
+    seg = torch.argmax(out[0], 1).cpu()[0, ::]
+    imagesc(seg)
