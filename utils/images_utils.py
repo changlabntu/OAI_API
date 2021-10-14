@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 from PIL import Image
+from skimage import data, io
+from matplotlib import pyplot as plt
 
 
 def to_8bit(x):
@@ -27,6 +29,7 @@ def imagesc(x, show=True, save=None):
         x = x - x.min()
         x = Image.fromarray(to_8bit(x))
     if show:
-        x.show()
+        io.imshow(np.array(x))
+        plt.show()
     if save:
         x.save(save)
