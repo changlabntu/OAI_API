@@ -67,8 +67,8 @@ def linear_registration(im1, im2, warp_mode, steps):
     # try registration using open CV
     # use cv2.findTransformECC
 
-    im1 = to_8bit(im1)[:, :, 0]#cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
-    im2 = to_8bit(im2)[:, :, 0]#cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
+    #im1 = to_8bit(im1)[:, :, 0]#cv2.cvtColor(im1, cv2.COLOR_BGR2GRAY)
+    #im2 = to_8bit(im2)[:, :, 0]#cv2.cvtColor(im2, cv2.COLOR_BGR2GRAY)
 
     if warp_mode == 3:
         warp_matrix = np.eye(3, 3, dtype=np.float32)

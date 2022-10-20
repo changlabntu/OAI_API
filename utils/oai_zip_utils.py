@@ -6,15 +6,24 @@ import pandas as pd
 import numpy as np
 from PIL import Image
 import shutil
-import zipfile
+#import zipfile
 
 
 def zip_content_list(zipfile):
     # create the list of zip file content in a txt list
-    os.system('unzip -Z1 ' + zipfile + ' "*/*/*/*/" > ' + zipfile.split('.zip')[0] + '.txt')
+    os.system('unzip -Z1 ' + zipfile + ' "*/*/*/*" > ' + zipfile.split('.zip')[0] + '.txt')
     # read the text file to pandas
-    list_of_folders = pd.read_csv(zipfile.split('.zip')[0] + '.txt', header=None)
-    list_of_folders = list_of_folders.rename(columns={0: 'folders'})
+    x = pd.read_csv(zipfile.split('.zip')[0] + '.txt', header=None)
+
+    #x = [x for x in list(x['folders']) if len(x.split('/')) == 5]
+    #x = list(set([a.replace(a.split('/')[-1], '') for a in x]))
+    #list_of_folders = pd.DataFrame({'folders': x})
+
+    #
+    x = sorted(list(x[0]))
+    x = [y for y in x if len(y.split('/')) == 5]
+    x = list(set([y[:-3] for y in x]))
+    list_of_folders = pd.DataFrame({'folders': x})
     return list_of_folders
 
 
@@ -40,8 +49,8 @@ def scan_zip_locate_sequences_par(zipfile):
 
     list_of_csv = [pd.read_csv(str(i)+'.csv') for i in range(n_worker)]
     total = pd.concat(list_of_csv)
-    final = pd.DataFrame({'ID': [x.split('/')[1] for x in total['0'].values], 'sequences': total['0'], 'folders': total['1']})
-    final.to_csv('extracted_oai_info/' + zipfile.split('/')[-1].split('.')[0] + '.csv', index=False)
+    final = pd.DataFrame({'ID': [x.split('/')[1] for x in total['0'].values], 'folders': total['0'], 'sequences': total['1']})
+    final.to_csv('meta/path' + zipfile.split('/')[-1].split('.')[0] + '.csv', index=False)
     return 0
 
 
@@ -61,7 +70,7 @@ def scan_zip_locate_sequences(irange, n_worker, list_of_folders):
         os.mkdir(dir_name)
 
         sub_folder = list_of_folders['folders'][i]
-        for z in range(1, 200):
+        for z in range(1, 10):
             try:
                 subprocess.run(['unzip', '-j', zipfile, sub_folder + str(z).zfill(3), '-d', dir_name])
                 found_series_description = pydicom.read_file(glob.glob(dir_name + '*')[0]).SeriesDescription
@@ -79,22 +88,6 @@ def scan_zip_locate_sequences(irange, n_worker, list_of_folders):
     return found
 
 
-def unzip_selected(df, zipname, destination):
-    print('Preparing archive...')
-    archive = zipfile.ZipFile(zipname)
-    print('Done...')
-    for i in range(df.shape[0]):
-        folder = df.iloc[i]['folders']
-        print(folder)
-        n = 1
-        while True:
-            try:
-                archive.extract(folder+str(n).zfill(3),  destination)
-                n = n + 1
-            except:
-                break
-
-
 def find_folders_by_id_and_sequence(df, path_of_sequences):
     """
     find the folder .zip file by patient ID and MRI sequence
@@ -104,42 +97,6 @@ def find_folders_by_id_and_sequence(df, path_of_sequences):
         ID, sequences = df.iloc[i][['ID', 'sequences']]
         folders.append(path_of_sequences.loc[(path_of_sequences['ID'] == ID) & (path_of_sequences['sequences'] == sequences), 'folders'].values[0])
     return folders
-
-
-def dcm_to_npys_and_metas(source, destination, metas, cohorts):
-    """
-    extract npys from dcms and record meta
-    """
-    if not os.path.isdir(destination):
-        os.mkdir(destination)
-
-    folder_list = []
-    for c in cohorts:
-        folder_list = folder_list + sorted(glob.glob(source + c + '/*/*/*'))
-
-    dcm_meta = []
-    for f in folder_list:
-        dcm_list = glob.glob(f+'/*')
-        dcm_list.sort()
-
-        # find ID and sequence and make folders if don't exist
-        ID = f.split('/')[-3]
-        sequence = pydicom.read_file(dcm_list[0]).SeriesDescription
-        if not os.path.isdir(destination + sequence + '/'):
-            os.mkdir(destination + sequence + '/')
-        if not os.path.isdir(destination + sequence + '/' + ID + '/'):
-            os.mkdir(destination + sequence + '/' + ID + '/')
-
-        for d in dcm_list:
-            dcm = pydicom.read_file(d)
-            npyname = destination + sequence + '/' + ID + '/' + d.split('/')[-1]
-            np.save(npyname + '.npy', dcm.pixel_array)
-            meta = [sequence + '/' + ID + '/' + d.split('/')[-1]]
-            for m in metas:
-                meta = meta + [getattr(dcm, m)]
-            dcm_meta.append(meta)
-    dcm_meta = pd.DataFrame(dcm_meta, columns=['filename']+metas)
-    dcm_meta.to_csv(destination + 'meta.csv', index=False)
 
 
 def meta_process(meta):
@@ -158,5 +115,6 @@ if __name__ == 'main':
     """
     locate pathes of MRI sequences and save as a table of [ID, sequences, folders] if not exist
     """
-    zipfile = '/media/ghc/GHc_data1/OAI_raw/OAI12MonthImages/results/12m.zip'
+    #zipfile = '/media/ghc/GHc_data1/OAI_raw/OAI12MonthImages/results/12m.zip'
+    zipfile = '/media/ghc/GHc_data2/OAI/OAI96MonthImages/results/96m.zip'
     scan_zip_locate_sequences_par(zipfile)
