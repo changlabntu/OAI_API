@@ -168,11 +168,11 @@ if __name__ == '__main__':
     model_seg, model_pcl, model_t2d = get_model()
 
     # basic info
-    source = '/media/ghc/GHc_data2/OAI_extracted/womac5min0/'
+    source = '/media/ghc/GHc_data2/OAI_extracted/womac4min0/'
     destination = source + 'Processed/'
     op = OAI_preprocess(source=source + 'dcm/Npy/', destination=destination)
 
-    sequence = 'SAG_IW_TSE_LEFT'
+    sequence = 'SAG_IW_TSE_RIGHT'
     subjects_list = [x.split('/')[-1] for x in sorted(glob.glob(source + 'dcm/Npy/' + sequence + '/*'))]
 
     # create destination

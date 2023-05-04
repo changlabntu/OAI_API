@@ -69,7 +69,7 @@ def dcm_2_npys(dcm_folder):
 
 
 def get_zip():
-    from main_oaimeta import ver_to_months
+    from main_meta import ver_to_months
     zipfiles = dict()
     for VER in ['00', '01', '03', '05', '06', '08', '10']:
         zipfiles[VER] = os.environ.get('zip' + ver_to_months(VER) + 'm')
@@ -84,8 +84,8 @@ if __name__ == '__main__':
     zipfiles = get_zip()
 
     # name of the data
-    csv = pd.read_csv('meta/allver00.csv')
-    data_name = 'allver00/'
+    csv = pd.read_csv('meta/womac4min0.csv')
+    data_name = 'womac4min0/'
 
     # unzip dicom files from the zip file
     for v in set(csv['VER']):

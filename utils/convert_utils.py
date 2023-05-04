@@ -18,34 +18,37 @@ def print_summary():
                 save='/media/ghc/GHc_data2/OAI_extracted/womac5min0/Processed/summary/'+name+'.png')
 
 
-root = '/media/ghc/GHc_data2/OAI_extracted/womac5min0/Processed/'
+root = '/media/ghc/GHc_data2/OAI_extracted/womac4min0/Processed/'
 source = root + 'TSE/'
 destination = root + 'full/'
 os.makedirs(destination, exist_ok=True)
 os.makedirs(destination + 'a/', exist_ok=True)
 os.makedirs(destination + 'b/', exist_ok=True)
 
-df = pd.read_csv('/media/ghc/GHc_data2/OAI_extracted/womac5min0/womac5min0.csv')
-df['labels'] = [(x[-1] == 'R') for x in df[df.columns[6:]].idxmax(axis=1)]
+df = pd.read_csv('meta/womac4min0.csv')
+#df['labels'] = [(x[-1] == 'R') for x in df[df.columns[6:]].idxmax(axis=1)]
+
+df['labels'] = [(x[-1] == 'R') for x in df[['V$$WOMKPR', 'V$$WOMKPL']].idxmax(axis=1)]
 
 for i in range(df.shape[0])[:]:
+    print(i)
     name = str(df.iloc[i]['ID']) + '_' + str(df.iloc[i]['VER']).zfill(2) + '_' + str(df.iloc[i]['SIDE'])
     label = df.iloc[i]['labels']
     side = df.iloc[i]['SIDE']
-    npy = np.load(source + name + '.npy')
+    npy = tiff.imread(source + name + '.tif')
     savename = str(df.iloc[i]['ID']) + '_' + str(df.iloc[i]['VER']).zfill(2)
-    for s in range(npy.shape[2]):
+    for s in range(npy.shape[0]):
         if label:
             if side == 'RIGHT':
                 tiff.imsave(destination + 'a/' +
-                            savename + '_' + str(s).zfill(3) + '.tif', npy[:, :, s])
+                            savename + '_' + str(s).zfill(3) + '.tif', npy[s, :, :])
             elif side == 'LEFT':
                 tiff.imsave(destination + 'b/' +
-                            savename + '_' + str(s).zfill(3) + '.tif', npy[:, :, s])
+                            savename + '_' + str(s).zfill(3) + '.tif', npy[s, :, :])
         else:
             if side == 'LEFT':
                 tiff.imsave(destination + 'a/' +
-                            savename + '_' + str(s).zfill(3) + '.tif', npy[:, :, s])
+                            savename + '_' + str(s).zfill(3) + '.tif', npy[s, :, :])
             elif side == 'RIGHT':
                 tiff.imsave(destination + 'b/' +
-                            savename + '_' + str(s).zfill(3) + '.tif', npy[:, :, s])
+                            savename + '_' + str(s).zfill(3) + '.tif', npy[s, :, :])
