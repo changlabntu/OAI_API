@@ -521,24 +521,20 @@ if __name__ == '__main__':
 
     # Add Moaks
     #xall = pd.merge(xall, moaks, on=['ID', 'VER', 'SIDE'], how='left')
-
     #xall = pd.merge(xall, age, on='ID', how='left')
-
     #xall = pd.merge(xall, sex, on='ID', how='left')
 
     # KL progression
-    later = ['V01XRKL', 'V03XRKL', 'V05XRKL', 'V06XRKL', 'V08XRKL', 'V10XRKL'][:4]
-    XRR0 = XRR.loc[XRR['V00XRKL'] < 2]
-    XRL0 = XRL.loc[XRL['V00XRKL'] < 2]
-    print(XRR0.shape[0] + XRL0.shape[0])
+    # Variable name for later KL grade
+    later = ['V01XRKL', 'V03XRKL', 'V05XRKL', 'V06XRKL', 'V08XRKL', 'V10XRKL'][:4]  # to 48 months
+    XRR0 = XRR.loc[XRR['V00XRKL'] < 2]  # baseline KL < 2, right knee
+    XRL0 = XRL.loc[XRL['V00XRKL'] < 2]  # baseline KL < 2, left knee
+    print('number of all knees KL <2 at base line = ' + str(XRR0.shape[0] + XRL0.shape[0]))
 
-    XRR1 = XRR0.loc[XRR0.loc[:, later].max(1) >= 2, :]
-    XRL1 = XRL0.loc[XRL0.loc[:, later].max(1) >= 2, :]
+    XRR1 = XRR0.loc[XRR0.loc[:, later].max(1) >= 2, :]  # has progression to KL >= 2 in 48 months, right knee
+    XRL1 = XRL0.loc[XRL0.loc[:, later].max(1) >= 2, :]  # has progression to KL >= 2 in 48 months, left knee
 
-    print(len(set(XRR1['ID'].values)) + len(set(XRL1['ID'].values)))
-    print(len(set(list(XRR1['ID'].values) + list(XRL1['ID'].values))))
-
-    moaksL = moaks.loc[(moaks['SIDE'] == 'LEFT') & (moaks['VER'] == '00'), :]
-    moaksR = moaks.loc[(moaks['SIDE'] == 'RIGHT') & (moaks['VER'] == '00'), :]
+    print('number of knees with progression = ' + str(len(set(XRR1['ID'].values)) + len(set(XRL1['ID'].values))))
+    print('number of subjects with progression = ' + str(len(set(list(XRR1['ID'].values) + list(XRL1['ID'].values)))))
 
 
