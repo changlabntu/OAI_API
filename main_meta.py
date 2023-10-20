@@ -510,7 +510,7 @@ if __name__ == '__main__':
     # XR reading
     xr = split_by_ver(df=oai['XR'], vars=['V$$XRKL', 'V$$XRJSM', 'V$$XRJSL'], ver_list=ver_list)
     # demographics
-    age = oai['CLINICAL'][['ID', 'V00AGE', 'P01BMI']]
+    age = oai['CLINICAL'][['ID', 'V00AGE', 'P01BMI']]  # P01BMI: BMI at baseline
     bmi = oai['CLINICAL'][['ID'] + ['V' + x + 'BMI' for x in ['01', '03', '05', '06', '08', '10']]]
     sex = oai['ENR'][['ID', 'P02SEX']]
 
@@ -526,6 +526,8 @@ if __name__ == '__main__':
 
     # KL progression
     # Variable name for later KL grade
+    # XRR: XRay reading of right knee
+    # XRL: XRay reading of left knee
     later = ['V01XRKL', 'V03XRKL', 'V05XRKL', 'V06XRKL', 'V08XRKL', 'V10XRKL'][:4]  # to 48 months
     XRR0 = XRR.loc[XRR['V00XRKL'] < 2]  # baseline KL < 2, right knee
     XRL0 = XRL.loc[XRL['V00XRKL'] < 2]  # baseline KL < 2, left knee
