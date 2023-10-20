@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import os, glob
 import pydicom
 import numpy as np
+import tifffile as tiff
 
 
 def unzip_selected(df, zipname, destination):
@@ -23,7 +24,7 @@ def unzip_selected(df, zipname, destination):
                 break
 
 
-def dcm_to_npys_and_metas(x, destination, metas):
+def dcm_to_tifs_and_metas(x, destination, metas):
     """
     extract npys from dcms and record meta
     """
@@ -44,16 +45,21 @@ def dcm_to_npys_and_metas(x, destination, metas):
         sequence = pydicom.read_file(dcm_list[0]).SeriesDescription
         VER = str(f.split('/')[-4].split('.')[0]).zfill(2)
         os.makedirs(destination + sequence + '/', exist_ok=True)
-        os.makedirs(destination + sequence + '/' + ID + '_' + VER + '/', exist_ok=True)
+        #os.makedirs(destination + sequence + '/' + ID + '_' + VER + '/', exist_ok=True)
 
+        a_tif = []
         for d in dcm_list:
             dcm = pydicom.read_file(d)
-            npyname = destination + sequence + '/' + ID + '_' + VER + '/' + d.split('/')[-1]
-            np.save(npyname + '.npy', dcm.pixel_array)
+            #npyname = destination + sequence + '/' + ID + '_' + VER + '/' + d.split('/')[-1]
+            #np.save(npyname + '.npy', dcm.pixel_array)
+            a_tif.append(dcm.pixel_array)
             meta = [sequence + '/' + ID + '_' + VER + '/' + d.split('/')[-1]]
             for m in metas:
                 meta = meta + [getattr(dcm, m)]
             dcm_meta.append(meta)
+        a_tif = np.stack(a_tif, 0)
+        npyname = destination + sequence + '/' + ID + '_' + VER
+        tiff.imwrite(npyname + '.tif', a_tif)
 
     dcm_meta = pd.DataFrame(dcm_meta, columns=['filename']+metas)
     dcm_meta.to_csv(destination + 'meta.csv', index=False)
@@ -61,7 +67,7 @@ def dcm_to_npys_and_metas(x, destination, metas):
 
 def dcm_2_npys(dcm_folder):
     npy_folder = dcm_folder + 'Npy/'
-    dcm_to_npys_and_metas(x=dcm_folder,
+    dcm_to_tifs_and_metas(x=dcm_folder,
                           destination=npy_folder,
                           metas=['ImagePositionPatient', 'SliceLocation'])
     meta = meta_process(meta=pd.read_csv(npy_folder + 'meta.csv'))
@@ -84,15 +90,17 @@ if __name__ == '__main__':
     zipfiles = get_zip()
 
     # name of the data
-    csv = pd.read_csv('meta/womac4min0.csv')
-    data_name = 'womac4min0/'
+    data_name = 'KL2min0'
+    csv = pd.read_csv('meta/' + data_name + '.csv')
+
+    #csv = csv.loc[csv['sequences'] == 'SAG_IW_TSE_']
 
     # unzip dicom files from the zip file
-    for v in set(csv['VER']):
+    for v in list(set(csv['VER']))[:]:
         csv_ver = csv.loc[csv['VER'] == v]
         unzip_selected(df=csv_ver.iloc[:, :],
                        zipname=source + zipfiles[str(v).zfill(2)],
-                       destination=destination + data_name + 'dcm/')
+                       destination=destination + data_name + '/dcm/')
 
     # convert the images from the dicom to .npy
-    meta = dcm_2_npys(dcm_folder=destination + data_name + 'dcm/')
+    #meta = dcm_2_npys(dcm_folder=destination + data_name + '/dcm/')
